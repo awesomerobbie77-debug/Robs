@@ -26,6 +26,7 @@
   --shadow:none;
 }
 *{box-sizing:border-box}
+[hidden]{display:none !important}
 body{
   background:var(--paper); color:var(--ink);
   font-family:"IBM Plex Sans",system-ui,-apple-system,"Segoe UI",sans-serif;
@@ -151,6 +152,12 @@ textarea{min-height:76px; resize:vertical; line-height:1.5}
 .chip:hover{border-color:var(--ink)}
 .chip .k{font-family:"IBM Plex Mono",monospace; color:var(--muted); font-size:11px}
 .empty{color:var(--faint); font-size:13.5px; padding:10px 0}
+.photorow{display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-top:10px; padding-top:10px; border-top:1px solid var(--rule)}
+.thumb{width:44px; height:44px; object-fit:cover; border:1px solid var(--rule)}
+.phase-desc{font-size:12.5px; color:var(--muted); margin-top:6px; min-height:34px}
+.banner--goal{border-style:solid; border-color:var(--acid); border-width:2px; background:var(--card)}
+.prog{height:10px; background:var(--sunk); border:1px solid var(--rule); margin:10px 0 6px; overflow:hidden}
+.prog i{display:block; height:100%; background:var(--acid); width:0}
 .banner{background:var(--sunk); border:1px dashed var(--rule); padding:10px 14px; display:flex; gap:10px; align-items:center; flex-wrap:wrap; font-size:13.5px}
 .note{font-size:12.5px; color:var(--muted); margin-top:10px}
 .chart{width:100%; height:auto; display:block; overflow:visible}
@@ -188,6 +195,17 @@ textarea{min-height:76px; resize:vertical; line-height:1.5}
     <button class="btn btn--small" id="clearDemo" style="margin-left:auto">Clear examples</button>
   </div>
 
+  <div class="banner banner--goal" id="goalBanner" hidden>
+    <span id="goalBannerText" style="flex:1 1 260px"></span>
+    <span class="row" style="margin:0">
+      <button class="btn btn--small" data-phase="maintain">Maintain</button>
+      <button class="btn btn--small" data-phase="recomp">Recomp</button>
+      <button class="btn btn--small" data-phase="bulk">Lean bulk</button>
+      <button class="btn btn--small" data-phase="cut">Keep cutting</button>
+      <button class="iconbtn" id="dismissGoal" title="Not now">✕</button>
+    </span>
+  </div>
+
   <!-- ================= TODAY ================= -->
   <section id="view-today">
     <div class="panel panel--label" style="margin-bottom:16px">
@@ -223,6 +241,14 @@ textarea{min-height:76px; resize:vertical; line-height:1.5}
           <button class="btn" id="stopBtn" hidden>Stop</button>
         </div>
         <label class="check" style="margin-top:8px"><input type="checkbox" id="offlineMode"> Offline estimate only (built-in food table)</label>
+        <div class="photorow" id="photoRow" hidden>
+          <input type="file" id="photoInput" accept="image/*" hidden>
+          <button class="btn" id="photoBtn">Scan label or plate</button>
+          <img class="thumb" id="photoThumb" alt="" hidden>
+          <div class="field" style="width:118px"><label class="lab" for="photoServings">Servings eaten</label>
+            <input type="number" id="photoServings" min="0.25" max="20" step="0.25" value="1"></div>
+          <span class="hint" style="color:var(--faint); font-size:12px; font-family:'IBM Plex Mono',monospace">label &rarr; read per-serving &times; servings · plate &rarr; estimate what's on it</span>
+        </div>
         <div class="status" id="mealStatus" hidden></div>
         <div class="draft" id="mealDraft" hidden>
           <h3>Check the estimate, then add it</h3>
@@ -316,23 +342,40 @@ textarea{min-height:76px; resize:vertical; line-height:1.5}
       </div>
 
       <div class="panel">
-        <div class="panel-head"><h2>Goal</h2></div>
+        <div class="panel-head"><h2>Phase</h2><span class="hint">switch it whenever the goal changes</span></div>
         <div class="fieldgrid">
-          <div class="field"><label class="lab" for="pGoal">Direction</label>
-            <select id="pGoal"><option value="-1">Lose fat</option><option value="0">Maintain</option><option value="1">Gain weight</option></select></div>
+          <div class="field"><label class="lab" for="pPhase">What you're doing right now</label>
+            <select id="pPhase">
+              <option value="cut">Cut — lose fat</option>
+              <option value="recomp">Recomp — hold weight</option>
+              <option value="maintain">Maintain</option>
+              <option value="bulk">Lean bulk — build muscle</option>
+            </select>
+            <span class="phase-desc" id="phaseDesc"></span></div>
           <div class="field" id="rateField"><label class="lab" for="pRate">Rate (<span class="wUnit">lb</span> per week)</label>
-            <select id="pRate"><option value="0.5">0.5 — gentle</option><option value="1">1.0 — standard</option><option value="1.5">1.5 — aggressive</option><option value="2">2.0 — very aggressive</option></select></div>
+            <select id="pRate"><option value="0.25">0.25 — very slow</option><option value="0.5">0.5 — gentle</option><option value="1">1.0 — standard</option><option value="1.5">1.5 — aggressive</option><option value="2">2.0 — very aggressive</option></select>
+            <span class="sub" id="rateWarn"></span></div>
+          <div class="field"><label class="lab" for="pGoalWeight">Goal weight (<span class="wUnit">lb</span>, optional)</label>
+            <input type="number" id="pGoalWeight" min="0" max="900" step="0.5" placeholder="—">
+            <span class="sub">Hit it and the page offers you the next phase.</span></div>
           <div class="field"><label class="lab" for="pProtein">Protein (g per <span class="wUnit">lb</span> bodyweight)</label>
             <input type="number" id="pProtein" min="0.3" max="1.6" step="0.05">
-            <span class="sub">0.7–1.0 covers most people. Higher end while cutting.</span></div>
+            <span class="sub">Protein is what keeps muscle while fat comes off. 1.0 g/lb in a deficit.</span></div>
           <div class="field"><label class="lab" for="pFat">Fat (% of calories)</label>
             <input type="number" id="pFat" min="15" max="50" step="1">
-            <span class="sub">Carbs take whatever calories are left.</span></div>
+            <span class="sub">Carbs take whatever calories are left — they fuel the training.</span></div>
           <div class="field"><label class="lab" for="pEatBack">Eat back training calories</label>
             <select id="pEatBack"><option value="0">None — target stays fixed</option><option value="0.5">Half</option><option value="1">All of it</option></select>
             <span class="sub">Burn estimates run optimistic. Half is the safe default.</span></div>
         </div>
       </div>
+    </div>
+
+    <div class="panel" style="margin-bottom:16px">
+      <div class="panel-head"><h2>Progress through this phase</h2><span class="hint" id="phaseStamp"></span></div>
+      <div class="prog"><i id="progFill"></i></div>
+      <div class="statgrid" id="goalStats"></div>
+      <div class="note" id="goalNote"></div>
     </div>
 
     <div class="panel panel--label" style="margin-bottom:16px">
@@ -723,8 +766,34 @@ const prettyDate = iso => dateOf(iso).toLocaleDateString(undefined, { weekday: '
 
 const DEFAULT_PROFILE = {
   units: 'imperial', sex: 'male', age: 30, heightCm: 178, weightKg: 81.6,
-  activity: 1.3, goalDir: -1, rateLb: 1, proteinPerLb: 0.9, fatPct: 28, eatBack: 0.5
+  activity: 1.3, goalDir: -1, rateLb: 1, proteinPerLb: 1.0, fatPct: 25, eatBack: 0.5,
+  phase: 'cut', goalWeightKg: null, phaseStart: null, phaseStartWeightKg: null, phasePrompted: false
 };
+
+/* A phase is a goal you can swap out. Each one sets the deficit and the macro
+   split it needs; everything stays editable afterwards. */
+const PHASES = {
+  cut: { dir: -1, rate: 1, protein: 1.0, fat: 25, label: 'Cut',
+    desc: 'A moderate deficit with protein high enough to hold the muscle you have. Keep lifting heavy — that is the other half of holding it.' },
+  recomp: { dir: 0, rate: 0, protein: 1.0, fat: 25, label: 'Recomp',
+    desc: 'Eat at maintenance, train hard, keep protein high. The scale barely moves while fat goes down and muscle goes up. Slow, but nothing is lost.' },
+  maintain: { dir: 0, rate: 0, protein: 0.8, fat: 30, label: 'Maintain',
+    desc: 'Hold your weight. Useful for a few weeks between a cut and a bulk — it lets appetite and training performance reset.' },
+  bulk: { dir: 1, rate: 0.5, protein: 0.9, fat: 25, label: 'Lean bulk',
+    desc: 'A small surplus so the weight you add is mostly muscle. Faster than about 0.5 lb a week is mostly fat for anyone past their first year of training.' }
+};
+function applyPhase(name, opts = {}) {
+  const ph = PHASES[name]; if (!ph) return;
+  const p = state.profile;
+  const changed = p.phase !== name;
+  p.phase = name; p.goalDir = ph.dir;
+  if (!opts.keepNumbers) { p.rateLb = ph.rate || p.rateLb; p.proteinPerLb = ph.protein; p.fatPct = ph.fat; }
+  if (changed) {
+    p.phaseStart = todayISO();
+    p.phaseStartWeightKg = trendWeightKg() ?? p.weightKg;
+    p.phasePrompted = false;
+  }
+}
 
 let state = { profile: { ...DEFAULT_PROFILE }, days: {}, favs: [], demo: false };
 let viewDate = todayISO();
@@ -738,6 +807,12 @@ const peekDay = iso => state.days[iso] || emptyDay(iso);
 
 /* ---------------------- storage -------------------------------------- */
 const LS_KEY = 'fuel-ledger-v1';
+function normalizeProfile(raw) {
+  const p = { ...DEFAULT_PROFILE, ...(raw || {}) };
+  if (!PHASES[p.phase]) p.phase = p.goalDir < 0 ? 'cut' : p.goalDir > 0 ? 'bulk' : 'maintain';
+  p.goalDir = PHASES[p.phase].dir;
+  return p;
+}
 function saveLocal() {
   try { localStorage.setItem(LS_KEY, JSON.stringify(state)); } catch (e) {}
 }
@@ -747,7 +822,7 @@ function loadLocal() {
     if (!raw) return false;
     const v = JSON.parse(raw);
     if (!v || !v.profile) return false;
-    state = { profile: { ...DEFAULT_PROFILE, ...v.profile }, days: v.days || {}, favs: v.favs || [], demo: !!v.demo };
+    state = { profile: normalizeProfile(v.profile), days: v.days || {}, favs: v.favs || [], demo: !!v.demo };
     return true;
   } catch (e) { return false; }
 }
@@ -781,7 +856,7 @@ async function initCloud() {
     const prof = await db.doc('app/profile').get();
     if (prof.exists) {
       const d = prof.data();
-      state.profile = { ...DEFAULT_PROFILE, ...d };
+      state.profile = normalizeProfile(d);
       delete state.profile.favs; delete state.profile.updatedAt; delete state.profile.demo;
       state.favs = Array.isArray(d.favs) ? d.favs : state.favs;
       state.demo = !!d.demo;
@@ -801,6 +876,33 @@ async function initCloud() {
 }
 
 /* ---------------------- the maths ------------------------------------ */
+/* The scale bounces 2-4 lb on water alone, so every decision here reads the
+   average of the most recent weigh-ins, never a single morning. */
+function weighIns() {
+  return Object.values(state.days).filter(d => d.weightKg)
+    .sort((a, b) => a.date < b.date ? -1 : 1).map(d => ({ iso: d.date, kg: d.weightKg }));
+}
+function trendWeightKg() {
+  const w = weighIns(); if (!w.length) return null;
+  const last = w.slice(-7);
+  return last.reduce((s2, x) => s2 + x.kg, 0) / last.length;
+}
+/* Observed rate of change in kg/week from the last three weeks of weigh-ins. */
+function observedRateKgWeek() {
+  const w = weighIns().filter(x => x.iso >= shiftISO(todayISO(), -21));
+  if (w.length < 3) return null;
+  const t0 = dateOf(w[0].iso);
+  const pts = w.map(x => ({ d: (dateOf(x.iso) - t0) / 86400000, kg: x.kg }));
+  const span = pts[pts.length - 1].d;
+  if (span < 6) return null;
+  const n = pts.length;
+  const mx = pts.reduce((a, b) => a + b.d, 0) / n, my = pts.reduce((a, b) => a + b.kg, 0) / n;
+  let num = 0, den = 0;
+  for (const q of pts) { num += (q.d - mx) * (q.kg - my); den += (q.d - mx) ** 2; }
+  if (!den) return null;
+  return (num / den) * 7;            // least-squares slope, kg per week
+}
+
 function bmrOf(p) {
   const base = 10 * p.weightKg + 6.25 * p.heightCm - 5 * p.age;
   return base + (p.sex === 'male' ? 5 : p.sex === 'female' ? -161 : -78);
@@ -869,6 +971,9 @@ function renderSummary() {
   let note = `${fmt(t.base)} kcal maintenance for ${dirWord}` +
     (t.burn ? `, plus ${Math.round(p.eatBack * 100)}% of today's ${fmt(t.burn)} kcal training burn` : '') + '.';
   if (t.floored) note += ' Held at a safety floor — the requested deficit would drop you too low.';
+  const pLeft = t.protein - tot.p;
+  if (p.goalDir <= 0 && pLeft > 20 && left < 400 && tot.kcal > 0)
+    note += ` ${r0(pLeft)} g of protein still to go on ${fmt(Math.max(left, 0))} kcal — spend what's left on protein, not carbs or fat. That is the difference between losing fat and losing muscle.`;
   $('#targetNote').textContent = note;
 }
 
@@ -985,6 +1090,59 @@ Body weight: ${kg.toFixed(1)} kg
 
 Reply with ONLY: {"name":"Short activity name","met":6.5,"note":"one short sentence"}
 Use the MET for that effort level. No text outside the JSON.`;
+
+const PHOTO_PROMPT = servings => `The attached image is one of three things: a nutrition facts label, a packaged food, or a photo of a meal. Work out which, then estimate what was eaten.
+
+If it is a NUTRITION FACTS LABEL: read the serving size and the per-serving numbers off the panel, then multiply every number by ${servings} serving(s) eaten. Put the serving size in "portion".
+If it is a PACKAGED FOOD with no readable panel: identify the product and use its standard published values for ${servings} serving(s).
+If it is a PHOTO OF FOOD: name each distinct food and estimate its portion from what is visible — plate and bowl size, cutlery, a hand, the container. Include cooking oil, butter and dressing you can see.
+
+Reply with ONLY this JSON:
+{"kind":"label","items":[{"name":"Granola","portion":"2/3 cup (55 g)","kcal":260,"protein_g":6,"carbs_g":38,"fat_g":10,"confidence":"high"}],"note":"one short sentence on what you saw and what you assumed"}
+
+"kind" is "label", "package" or "plate". Calories must agree with the macros (4/4/9) within about 10%. Numbers are plain numbers, no units. If the image has no food in it at all, return an empty items array and say so in "note". No text outside the JSON.`;
+
+let photoOK = false, photoUrl = null;
+async function scanPhoto(file) {
+  if (!file || !sampleFn) return;
+  const status = $('#mealStatus');
+  const show = (t, bad) => { status.hidden = false; status.textContent = t; status.classList.toggle('bad', !!bad); };
+  const thumb = $('#photoThumb');
+  if (photoUrl) URL.revokeObjectURL(photoUrl);
+  photoUrl = URL.createObjectURL(file);
+  thumb.src = photoUrl; thumb.hidden = false;
+  const servings = clamp(+$('#photoServings').value || 1, 0.25, 20);
+  $('#photoBtn').disabled = true; $('#estimateBtn').disabled = true; $('#stopBtn').hidden = false;
+  show('Claude is reading the image…');
+  abortCtl = new AbortController();
+  try {
+    const data = await sampleFn.json(PHOTO_PROMPT(servings), { images: file, signal: abortCtl.signal });
+    const items = (data && Array.isArray(data.items) ? data.items : []).map(i => ({
+      id: uid(), name: String(i.name || 'Item').slice(0, 60), portion: String(i.portion || 'one serving').slice(0, 40),
+      kcal: Math.max(+i.kcal || 0, 0), p: Math.max(+i.protein_g || 0, 0), c: Math.max(+i.carbs_g || 0, 0), f: Math.max(+i.fat_g || 0, 0),
+      src: 'claude', conf: i.confidence === 'low' ? 'low' : 'ok'
+    })).filter(i => i.name);
+    if (!items.length) { show(data && data.note ? 'Claude: ' + String(data.note).slice(0, 160) : 'No food found in that image — try again with the label or the plate filling more of the frame.', true); return; }
+    draft = items;
+    const kind = { label: 'Read off the label', package: 'Identified the product', plate: 'Estimated from the photo' }[data.kind] || 'Estimated from the image';
+    show(`${kind}${data.note ? ' — ' + String(data.note).slice(0, 150) : ''}`);
+    renderDraft();
+  } catch (e) {
+    const code = e && e.code;
+    const why = {
+      cancelled: 'Stopped.',
+      image_rejected: 'That file could not be read — try a JPEG or PNG under 20 MB.',
+      images_unavailable: 'This view cannot send images to Claude. Type the food in instead.',
+      not_granted: 'Claude is not allowed for this page — type the food in instead.',
+      rate_limited: 'Claude is rate limited right now — give it a minute.',
+      invalid_json: "Claude's answer did not parse — try the shot again."
+    }[code] || 'Could not reach Claude for that image — type the food in instead.';
+    show(why, code !== 'cancelled');
+  } finally {
+    $('#photoBtn').disabled = false; $('#estimateBtn').disabled = false; $('#stopBtn').hidden = true; abortCtl = null;
+    $('#photoInput').value = '';
+  }
+}
 
 let abortCtl = null;
 async function estimateMeal(text) {
@@ -1196,6 +1354,74 @@ function drawWeightChart() {
   $('#weightUnitHint').textContent = `weigh-ins in ${imp ? 'lb' : 'kg'} · line is the 7-day average`;
 }
 
+/* ---------------------- phase progress ------------------------------- */
+function renderGoalProgress() {
+  const p = state.profile, imp = p.units === 'imperial';
+  const conv = kg => (imp ? kg * LB_PER_KG : kg);
+  const u = imp ? 'lb' : 'kg';
+  const trend = trendWeightKg();
+  const obs = observedRateKgWeek();
+  $('#phaseStamp').textContent = PHASES[p.phase].label + (p.phaseStart ? ' since ' + prettyDate(p.phaseStart) : '');
+
+  const inPhase = weighIns().filter(x => !p.phaseStart || x.iso >= p.phaseStart);
+  const firstSeen = (inPhase[0] || weighIns()[0] || {}).kg;
+  const start = p.phaseStartWeightKg ?? firstSeen ?? trend ?? p.weightKg;
+  const goal = p.goalWeightKg;
+  let pct = 0;
+  if (goal && trend != null && Math.abs(start - goal) > 0.05) pct = clamp((start - trend) / (start - goal) * 100, 0, 100);
+  else if (!goal) pct = 0;
+  $('#progFill').style.width = pct + '%';
+
+  const rows = [
+    ['Phase', PHASES[p.phase].label],
+    ['Trend weight', trend != null ? conv(trend).toFixed(1) + ' ' + u : '—'],
+    ['Goal weight', goal ? conv(goal).toFixed(1) + ' ' + u : 'not set'],
+    ['To go', goal && trend != null ? Math.abs(conv(trend) - conv(goal)).toFixed(1) + ' ' + u : '—'],
+    ['Actual pace', obs != null ? (obs >= 0 ? '+' : '−') + Math.abs(conv(obs)).toFixed(2) + ' ' + u + '/wk' : '—']
+  ];
+  $('#goalStats').innerHTML = rows.map(([l, v]) => `<div class="s"><span class="lab">${l}</span><span class="v">${v}</span></div>`).join('');
+
+  let note = PHASES[p.phase].desc + ' ';
+  if (goal && trend != null) {
+    const toGo = Math.abs(conv(trend) - conv(goal));
+    const planRate = p.goalDir === 0 ? 0 : p.rateLb;
+    const reached = (p.goalDir < 0 && trend <= goal) || (p.goalDir > 0 && trend >= goal);
+    if (reached) note += 'You are at your goal weight — pick the next phase above and the targets rebuild around it.';
+    else if (planRate > 0) {
+      const weeks = toGo / (imp ? planRate : planRate / LB_PER_KG);
+      const eta = new Date(Date.now() + weeks * 7 * 86400000);
+      note += `${toGo.toFixed(1)} ${u} to go — about ${weeks.toFixed(0)} week${weeks < 1.5 ? '' : 's'} at your planned pace, landing around ${eta.toLocaleDateString(undefined, { month: 'long', day: 'numeric' })}.`;
+      if (obs != null && Math.abs(obs) > 0.02) {
+        const obsWeeks = toGo / Math.abs(conv(obs));
+        const dirRight = (p.goalDir < 0 && obs < 0) || (p.goalDir > 0 && obs > 0);
+        note += dirRight
+          ? ` At the pace the scale is actually moving, ${obsWeeks.toFixed(0)} weeks.`
+          : ' The scale is currently moving the other way — give it two weeks of honest logging before changing anything.';
+      }
+    } else note += 'No rate set for this phase, so there is no finish line to project.';
+  } else if (!goal) {
+    note += 'Set a goal weight above and this tracks how far through the phase you are and when you will get there.';
+  } else {
+    note += 'Log a few weigh-ins and the projection appears here.';
+  }
+  $('#goalNote').textContent = note;
+}
+
+function renderGoalBanner() {
+  const p = state.profile, b = $('#goalBanner');
+  const trend = trendWeightKg();
+  const reached = p.goalWeightKg && trend != null && !p.phasePrompted &&
+    ((p.goalDir < 0 && trend <= p.goalWeightKg) || (p.goalDir > 0 && trend >= p.goalWeightKg));
+  b.hidden = !reached;
+  if (!reached) return;
+  const imp = p.units === 'imperial';
+  const w = (imp ? trend * LB_PER_KG : trend).toFixed(1) + (imp ? ' lb' : ' kg');
+  $('#goalBannerText').innerHTML = `<b>Goal reached — your trend weight is ${w}.</b> ` +
+    (p.goalDir < 0
+      ? 'Fat loss is done. Building muscle from here means eating at or above maintenance, so pick the next phase:'
+      : 'Pick what comes next:');
+}
+
 /* ---------------------- setup ---------------------------------------- */
 function fillProfileForm() {
   const p = state.profile, imp = p.units === 'imperial';
@@ -1206,9 +1432,15 @@ function fillProfileForm() {
   $('#pCm').value = Math.round(p.heightCm);
   $('#pWeight').value = +(imp ? p.weightKg * LB_PER_KG : p.weightKg).toFixed(1);
   $('#pActivity').value = String(p.activity);
-  $('#pGoal').value = String(p.goalDir); $('#pRate').value = String(p.rateLb);
+  $('#pPhase').value = p.phase; $('#pRate').value = String(p.rateLb);
+  $('#pGoalWeight').value = p.goalWeightKg ? +(imp ? p.goalWeightKg * LB_PER_KG : p.goalWeightKg).toFixed(1) : '';
+  $('#phaseDesc').textContent = PHASES[p.phase].desc;
   $('#pProtein').value = p.proteinPerLb; $('#pFat').value = p.fatPct; $('#pEatBack').value = String(p.eatBack);
   $('#rateField').hidden = p.goalDir === 0;
+  const maxRate = p.weightKg * LB_PER_KG * 0.01;
+  $('#rateWarn').textContent = (p.goalDir < 0 && p.rateLb > maxRate)
+    ? `Above 1% of bodyweight a week (${maxRate.toFixed(1)} lb) you start giving back muscle. Slow it down or accept the trade.`
+    : (p.goalDir > 0 && p.rateLb > 0.75 ? 'Faster than 0.75 lb a week is mostly fat, not muscle.' : '');
   $$('.wUnit').forEach(e => e.textContent = imp ? 'lb' : 'kg');
 }
 
@@ -1223,8 +1455,12 @@ function readProfileForm() {
   const w = +$('#pWeight').value || (imp ? 180 : 82);
   p.weightKg = clamp(imp ? w / LB_PER_KG : w, 27, 400);
   p.activity = +$('#pActivity').value;
-  p.goalDir = +$('#pGoal').value;
+  if ($('#pPhase').value !== p.phase) applyPhase($('#pPhase').value);
+  p.goalDir = PHASES[p.phase].dir;
   p.rateLb = +$('#pRate').value;
+  const gw = +$('#pGoalWeight').value;
+  const newGoal = gw > 0 ? clamp(imp ? gw / LB_PER_KG : gw, 27, 400) : null;
+  if (newGoal !== p.goalWeightKg) { p.goalWeightKg = newGoal; p.phasePrompted = false; }
   p.proteinPerLb = clamp(+$('#pProtein').value || 0.9, 0.3, 1.6);
   p.fatPct = clamp(+$('#pFat').value || 28, 15, 50);
   p.eatBack = +$('#pEatBack').value;
@@ -1247,7 +1483,7 @@ function renderCalcs() {
   const bmi = p.weightKg / Math.pow(p.heightCm / 100, 2);
   $('#calcNote').textContent =
     `Mifflin–St Jeor puts your resting burn at ${fmt(t.bmr)} kcal; your daily-life multiplier of ${p.activity}× brings maintenance to ${fmt(t.base)} kcal before any training. ` +
-    `Protein is ${p.proteinPerLb} g per lb of your ${r0(lb)} lb bodyweight, fat is ${p.fatPct}% of calories (floored at 0.28 g/lb), carbs take the rest. ` +
+    `You are in a ${PHASES[p.phase].label.toLowerCase()} phase. Protein is ${p.proteinPerLb} g per lb of your ${r0(lb)} lb bodyweight, fat is ${p.fatPct}% of calories (floored at 0.28 g/lb), carbs take the rest. ` +
     `BMI ${bmi.toFixed(1)}. These are population averages — if the scale disagrees with the maths after three weeks, trust the scale and adjust the target by 100–200 kcal.`;
   $('#storageNote').textContent = db
     ? 'Your log is saved to this artifact\'s private store, so it follows you to any device where you open this page.'
@@ -1318,7 +1554,8 @@ function renderAll() {
   renderDayInputs();
   if (activeTab === 'today') { renderSummary(); renderLog(); renderFavs(); }
   if (activeTab === 'trends') renderTrends();
-  if (activeTab === 'setup') renderCalcs();
+  if (activeTab === 'setup') { renderCalcs(); renderGoalProgress(); }
+  renderGoalBanner();
   $('#demoBanner').hidden = !state.demo;
 }
 
@@ -1407,7 +1644,7 @@ function wire() {
     const s = $('#woNote'); s.textContent = 'Saved.'; setTimeout(() => s.textContent = '', 2500);
   };
 
-  ['pUnits', 'pSex', 'pAge', 'pFt', 'pIn', 'pCm', 'pWeight', 'pActivity', 'pGoal', 'pRate', 'pProtein', 'pFat', 'pEatBack']
+  ['pUnits', 'pSex', 'pAge', 'pFt', 'pIn', 'pCm', 'pWeight', 'pActivity', 'pPhase', 'pGoalWeight', 'pRate', 'pProtein', 'pFat', 'pEatBack']
     .forEach(id => $('#' + id).addEventListener('change', () => {
       if (id === 'pUnits') {
         const wasImp = state.profile.units === 'imperial';
@@ -1416,6 +1653,19 @@ function wire() {
       }
       readProfileForm(); fillProfileForm();
     }));
+
+  $('#photoBtn').onclick = () => $('#photoInput').click();
+  $('#photoInput').addEventListener('change', e => { const f = e.target.files && e.target.files[0]; if (f) scanPhoto(f); });
+
+  $('#goalBanner').addEventListener('click', e => {
+    const b = e.target.closest('button'); if (!b) return;
+    const p = state.profile;
+    if (b.id === 'dismissGoal') { $('#goalBanner').hidden = true; return; }
+    const next = b.dataset.phase;
+    if (next && next !== p.phase) { applyPhase(next); p.goalWeightKg = null; }
+    p.phasePrompted = true;
+    persist(viewDate); fillProfileForm(); renderAll();
+  });
 
   $('#exportBtn').onclick = exportCsv;
   $('#resetBtn').onclick = () => {
@@ -1461,9 +1711,14 @@ function boot() {
 
   // Capabilities light up when (and if) they resolve.
   if (window.claude && claude.use) {
-    claude.use('sample').then(s => {
+    claude.use('sample').then(async s => {
       sampleFn = s;
       $('#engineHint').textContent = s ? 'Claude looks up the numbers' : 'built-in food table';
+      if (!s) return;
+      const lim = await s.limits().catch(() => null);
+      photoOK = !!(lim && lim.images);
+      $('#photoRow').hidden = !photoOK;
+      if (photoOK && lim.images.mediaTypes) $('#photoInput').accept = lim.images.mediaTypes.join(',');
     }).catch(() => { $('#engineHint').textContent = 'built-in food table'; });
     claude.use('downloads').then(d => { downloads = d; }).catch(() => {});
     initCloud();
