@@ -40,6 +40,9 @@ Published as a Claude Artifact: https://claude.ai/artifact/FE9H7HHTLi6bYp1TyDfJf
   weigh-in chart with a 7-day moving average plus the weekly rate it implies.
 - Quick-add favourites, per-day navigation, CSV export.
 
+The log starts empty — no seeded sample data. If anything throws, the message
+is kept under Setup -> Data rather than disappearing.
+
 ## Layout
 
 `app.html` is the artifact source, exactly as published. Artifacts supply the

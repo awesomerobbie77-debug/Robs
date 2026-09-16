@@ -195,11 +195,6 @@ textarea{min-height:76px; resize:vertical; line-height:1.5}
 </header>
 
 <main class="wrap">
-  <div class="banner" id="demoBanner" hidden>
-    <span><b>Example data.</b> These meals, workouts and weights are made up so the page shows what it does.</span>
-    <button class="btn btn--small" id="clearDemo" style="margin-left:auto">Clear examples</button>
-  </div>
-
   <div class="banner banner--goal" id="goalBanner" hidden>
     <span id="goalBannerText" style="flex:1 1 260px"></span>
     <span class="row" style="margin:0">
@@ -865,13 +860,13 @@ async function initCloud() {
       state.profile = normalizeProfile(d);
       delete state.profile.favs; delete state.profile.updatedAt; delete state.profile.demo;
       state.favs = Array.isArray(d.favs) ? d.favs : state.favs;
-      state.demo = !!d.demo;
+      state.demo = false;
       const snap = await db.collection('days').orderBy('date', 'desc').limit(120).get();
       const merged = { ...state.days };
       const stale = [];
       snap.docs.forEach(doc => {
         const v = doc.data(); if (!v || !v.date) return;
-        if (v.demo && !state.demo) return;                  // examples this device already cleared
+        if (v.demo) { try { db.doc('days/' + v.date).delete().catch(() => {}); } catch (e) {} return; }
         const cloud = { ...emptyDay(v.date), ...v };
         const local = merged[v.date];
         if (!local) { merged[v.date] = cloud; return; }
@@ -879,6 +874,7 @@ async function initCloud() {
         else stale.push(v.date);                            // this device holds the newer copy
       });
       state.days = merged;
+      purgeExamples();
       Object.values(state.days).forEach(d => {              // push up anything the cloud is missing
         if (!snap.docs.some(doc => doc.id === d.date) || stale.includes(d.date)) queueWrite('days/' + d.date, d);
       });
@@ -1046,6 +1042,22 @@ function renderDayInputs() {
   $('#nextDay').disabled = viewDate >= todayISO();
   $$('.wUnit').forEach(e => e.textContent = p.units === 'imperial' ? 'lb' : 'kg');
 }
+
+let lastError = null;
+const errText = e => (e && e.message) ? e.message : String(e);
+function noteError(err, doing) {
+  lastError = { when: new Date().toLocaleString(), doing, message: errText(err),
+    stack: (err && err.stack ? String(err.stack).split('\n')[1] || '' : '') };
+  try { renderErrorNote(); } catch (e) {}
+}
+function renderErrorNote() {
+  const el = $('#errorNote');
+  if (!el) return;
+  el.hidden = !lastError;
+  if (lastError) el.textContent = `Last error — ${lastError.when}, while ${lastError.doing}: ${lastError.message}${lastError.stack ? ' (' + lastError.stack.trim() + ')' : ''}`;
+}
+window.addEventListener('error', e => noteError(e.error || e.message, 'running the page'));
+window.addEventListener('unhandledrejection', e => noteError(e.reason, 'talking to storage or Claude'));
 
 const esc = s => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 const isFav = i => state.favs.some(f => f.name === i.name && r0(f.kcal) === r0(i.kcal));
@@ -1228,7 +1240,6 @@ async function addWorkout() {
   } else { met = { easy: 4, mod: 6, hard: 8 }[eff]; note = ' Activity not recognised — used a generic MET.'; }
 
   const kcal = Math.max((met - 1) * 3.5 * kg / 200 * min, 0);
-  clearDemoIfNeeded();
   getDay(viewDate).moves.push({ id: uid(), name, minutes: min, intensity: eff, met: +met.toFixed(1), kcal, src });
   persist(viewDate); renderAll();
   $('#woText').value = '';
@@ -1503,58 +1514,24 @@ function renderCalcs() {
     `Mifflin–St Jeor puts your resting burn at ${fmt(t.bmr)} kcal; your daily-life multiplier of ${p.activity}× brings maintenance to ${fmt(t.base)} kcal before any training. ` +
     `You are in a ${PHASES[p.phase].label.toLowerCase()} phase. Protein is ${p.proteinPerLb} g per lb of your ${r0(lb)} lb bodyweight, fat is ${p.fatPct}% of calories (floored at 0.28 g/lb), carbs take the rest. ` +
     `BMI ${bmi.toFixed(1)}. These are population averages — if the scale disagrees with the maths after three weeks, trust the scale and adjust the target by 100–200 kcal.`;
+  renderErrorNote();
   $('#storageNote').textContent = db
     ? 'Your log is saved to this artifact\'s private store, so it follows you to any device where you open this page.'
     : 'Your log is saved in this browser only — this view could not reach the artifact store.';
 }
 
-/* ---------------------- demo seed ------------------------------------ */
-function seedDemo() {
-  state.demo = true;
-  const plans = [
-    [['Greek Yogurt', '1 cup', 190, 20, 12, 5, 'Breakfast'], ['Blueberries', '1 cup', 85, 1, 21, 0, 'Breakfast'],
-     ['Chicken Breast', '6 oz', 280, 53, 0, 6, 'Lunch'], ['White Rice', '1 cup', 205, 4, 45, 0, 'Lunch'],
-     ['Broccoli', '2 cups', 62, 5, 12, 1, 'Lunch'], ['Steak', '8 oz', 570, 62, 0, 36, 'Dinner'],
-     ['Sweet Potato', '1 medium', 135, 3, 32, 0, 'Dinner'], ['Whey Protein', '1 scoop', 120, 24, 2, 2, 'Snack'],
-     ['Whole Wheat Bread', '2 slices', 140, 7, 23, 2, 'Breakfast'], ['Peanut Butter', '2 tbsp', 190, 8, 6, 16, 'Breakfast'],
-     ['Milk', '1 cup', 150, 8, 12, 8, 'Snack']],
-    [['Eggs', '3 eggs', 215, 19, 2, 14, 'Breakfast'], ['Whole Wheat Bread', '2 slices', 140, 7, 23, 2, 'Breakfast'],
-     ['Turkey Sandwich', '1 sandwich', 360, 20, 40, 13, 'Lunch'], ['Potato Chips', '1 bag', 230, 3, 23, 15, 'Lunch'],
-     ['Pasta', '2 cups', 316, 12, 62, 2, 'Dinner'], ['Marinara', '1 cup', 160, 5, 25, 5, 'Dinner'],
-     ['Ground Beef', '4 oz', 250, 26, 0, 15, 'Dinner'], ['Ice Cream', '1 cup', 275, 5, 32, 15, 'Snack'], ['Banana', '1 medium', 105, 1, 27, 0, 'Snack']],
-    [['Oatmeal', '1 serving', 155, 7, 27, 3, 'Breakfast'], ['Peanut Butter', '2 tbsp', 190, 8, 6, 16, 'Breakfast'],
-     ['Burrito Bowl', '1 bowl', 680, 38, 68, 26, 'Lunch'], ['Salmon', '6 oz', 355, 34, 0, 22, 'Dinner'],
-     ['Quinoa', '1 cup', 220, 8, 39, 4, 'Dinner'], ['Almonds', '1 oz', 165, 6, 6, 14, 'Snack'], ['Greek Yogurt', '1 cup', 190, 20, 12, 5, 'Snack'],
-     ['Granola Bar', '1 bar', 230, 5, 38, 7, 'Snack']]
-  ];
-  const moves = [
-    [['Weights', 55, 'hard', 5.5], ['Walking', 30, 'mod', 3.8]],
-    [['Running', 35, 'mod', 9.8]],
-    [], [['Weights', 60, 'mod', 5.0]], [['Cycling', 45, 'hard', 10.5]], [], [['Hiit', 25, 'hard', 10]],
-    [['Weights', 50, 'mod', 5.0]], [], [['Basketball', 60, 'mod', 8]]
-  ];
-  const kg = state.profile.weightKg;
-  for (let i = 9; i >= 0; i--) {
-    const iso = shiftISO(todayISO(), -i);
-    const d = emptyDay(iso); d.demo = true;
-    const plan = plans[i % plans.length];
-    const cut = i === 0 ? plan.slice(0, 5) : plan;
-    d.food = cut.map(([name, portion, kcal, p, c, f, meal]) => ({ id: uid(), name, portion, kcal, p, c, f, meal, src: 'local' }));
-    d.moves = (moves[i] || []).map(([name, minutes, intensity, met]) => ({
-      id: uid(), name, minutes, intensity, met, kcal: (met - 1) * 3.5 * kg / 200 * minutes, src: 'local' }));
-    d.steps = 4000 + ((i * 1731) % 7000);
-    d.weightKg = kg + (i * 0.045) + ((i % 3) - 1) * 0.25;
-    state.days[iso] = d;
-  }
-}
-function clearDemoIfNeeded() {
-  if (!state.demo) return;
-  const gone = Object.keys(state.days).filter(k => state.days[k].demo);
+/* ---------------------- examples ------------------------------------- */
+/* Early versions seeded ten example days so a brand-new page showed what it
+   does. In daily use that is just someone else's food in your log, so nothing
+   is seeded any more and any leftovers are cleared on sight. */
+function purgeExamples() {
+  const gone = Object.keys(state.days).filter(k => state.days[k] && state.days[k].demo);
+  if (!gone.length && !state.demo) return [];
   gone.forEach(k => delete state.days[k]);
   state.demo = false;
-  $('#demoBanner').hidden = true;
   saveLocal();
-  if (db) gone.forEach(k => db.doc('days/' + k).delete().catch(() => {}));
+  if (db) gone.forEach(k => { try { db.doc('days/' + k).delete().catch(() => {}); } catch (e) {} });
+  return gone;
 }
 
 /* ---------------------- events --------------------------------------- */
@@ -1574,7 +1551,6 @@ function renderAll() {
   if (activeTab === 'trends') renderTrends();
   if (activeTab === 'setup') { renderCalcs(); renderGoalProgress(); }
   renderGoalBanner();
-  $('#demoBanner').hidden = !state.demo;
 }
 
 let bootDay = todayISO();
@@ -1595,7 +1571,6 @@ function wire() {
   $('#prevDay').onclick = () => { viewDate = shiftISO(viewDate, -1); renderAll(); };
   $('#nextDay').onclick = () => { if (viewDate < todayISO()) { viewDate = shiftISO(viewDate, 1); renderAll(); } };
   $('#jumpToday').onclick = () => { viewDate = todayISO(); renderAll(); };
-  $('#clearDemo').onclick = () => { clearDemoIfNeeded(); persist(viewDate); renderAll(); };
 
   $('#estimateBtn').onclick = () => {
     const text = $('#mealText').value.trim();
@@ -1628,27 +1603,30 @@ function wire() {
   $('#discardDraft').onclick = () => { draft = null; renderDraft(); $('#mealStatus').hidden = true; };
   $('#addDraft').onclick = () => {
     const status = $('#mealStatus');
-    if (!draft || !draft.length) {
-      status.hidden = false; status.classList.add('bad');
-      status.textContent = 'Nothing to add — run Estimate first.';
+    const say = (t, bad) => { status.hidden = false; status.textContent = t; status.classList.toggle('bad', !!bad); };
+    if (!draft || !draft.length) { say('Nothing to add — run Estimate first.', true); return; }
+    const meal = $('#mealType').value;
+    const kcal = draft.reduce((a, i) => a + i.kcal, 0);
+    const n = draft.length;
+    // The log write happens first and on its own, so nothing downstream of it
+    // can cost you the meal you just entered.
+    try {
+      const d = getDay(viewDate);
+      draft.forEach(i => d.food.push({ ...i, id: uid(), meal, t: Date.now() }));
+      draft = null;
+      saveLocal();
+    } catch (err) {
+      noteError(err, 'adding to the log');
+      say('Could not add that — ' + errText(err) + '. The exact wording is under Setup \u2192 Data.', true);
       return;
     }
-    try {
-      clearDemoIfNeeded();
-      const meal = $('#mealType').value;
-      const d = getDay(viewDate);
-      const kcal = draft.reduce((a, i) => a + i.kcal, 0);
-      const n = draft.length;
-      draft.forEach(i => d.food.push({ ...i, id: uid(), meal, t: Date.now() }));
-      draft = null; renderDraft();
-      $('#mealText').value = '';
-      persist(viewDate); renderAll();
-      status.hidden = false; status.classList.remove('bad');
-      status.textContent = `Added ${n} item${n === 1 ? '' : 's'} to ${meal} on ${prettyDate(viewDate)} — ${fmt(kcal)} kcal.`;
-      setTimeout(() => { if (status.textContent.startsWith('Added ')) status.hidden = true; }, 6000);
-    } catch (err) {
-      status.hidden = false; status.classList.add('bad');
-      status.textContent = 'Could not add that: ' + (err && err.message ? err.message : String(err)) + ' — screenshot this and send it over.';
+    say(`Added ${n} item${n === 1 ? '' : 's'} to ${meal} on ${prettyDate(viewDate)} \u2014 ${fmt(kcal)} kcal.`);
+    setTimeout(() => { if (status.textContent.startsWith('Added ')) status.hidden = true; }, 6000);
+    $('#mealText').value = '';
+    try { renderDraft(); persist(viewDate); renderAll(); }
+    catch (err) {
+      noteError(err, 'refreshing the page after the meal was saved');
+      say(`Saved ${n} item${n === 1 ? '' : 's'} to ${meal}, but the page did not refresh \u2014 reload it. Details under Setup \u2192 Data.`, true);
     }
   };
 
@@ -1667,7 +1645,6 @@ function wire() {
   });
   $('#favRow').addEventListener('click', e => {
     const b = e.target.closest('[data-quick]'); if (!b) return;
-    clearDemoIfNeeded();
     const f = state.favs[+b.dataset.quick];
     getDay(viewDate).food.push({ ...f, id: uid(), meal: $('#mealType').value, t: Date.now(), conf: 'ok' });
     persist(viewDate); renderAll();
@@ -1676,7 +1653,6 @@ function wire() {
   $('#woBtn').onclick = addWorkout;
   $('#woText').addEventListener('keydown', e => { if (e.key === 'Enter') addWorkout(); });
   $('#saveDayBits').onclick = () => {
-    clearDemoIfNeeded();
     const d = getDay(viewDate), p = state.profile;
     d.steps = clamp(+$('#stepsInput').value || 0, 0, 80000);
     const w = +$('#weightInput').value;
@@ -1746,8 +1722,8 @@ async function exportCsv() {
 
 /* ---------------------- boot ----------------------------------------- */
 function boot() {
-  const had = loadLocal();
-  if (!had) { seedDemo(); saveLocal(); }
+  loadLocal();
+  purgeExamples();
   wire();
   fillProfileForm();
   setTab('today');
