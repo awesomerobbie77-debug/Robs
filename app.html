@@ -802,7 +802,14 @@ let draft = null;
 let db = null, sampleFn = null, downloads = null;
 
 const emptyDay = iso => ({ date: iso, food: [], moves: [], steps: 0, weightKg: null, demo: false });
-const getDay = iso => (state.days[iso] ||= emptyDay(iso));
+const getDay = iso => {
+  let d = state.days[iso];
+  if (!d) return (state.days[iso] = emptyDay(iso));
+  if (Object.isFrozen(d) || Object.isFrozen(d.food) || Object.isFrozen(d.moves)) d = state.days[iso] = thaw(d);
+  if (!Array.isArray(d.food)) d.food = [];
+  if (!Array.isArray(d.moves)) d.moves = [];
+  return d;
+};
 const peekDay = iso => state.days[iso] || emptyDay(iso);
 
 /* ---------------------- storage -------------------------------------- */
@@ -826,6 +833,11 @@ function loadLocal() {
     return true;
   } catch (e) { return false; }
 }
+
+/* Snapshots handed over by the store are frozen, and a frozen object silently
+   refuses writes (or throws, depending on the browser). Everything that lands
+   in state is a copy we own. */
+const thaw = v => { try { return JSON.parse(JSON.stringify(v)); } catch (e) { return v; } };
 
 const writeQueue = new Map();
 function queueWrite(path, body) {
@@ -856,16 +868,16 @@ async function initCloud() {
   try {
     const prof = await db.doc('app/profile').get();
     if (prof.exists) {
-      const d = prof.data();
+      const d = thaw(prof.data());
       state.profile = normalizeProfile(d);
       delete state.profile.favs; delete state.profile.updatedAt; delete state.profile.demo;
-      state.favs = Array.isArray(d.favs) ? d.favs : state.favs;
+      state.favs = Array.isArray(d.favs) ? thaw(d.favs) : state.favs;
       state.demo = false;
       const snap = await db.collection('days').orderBy('date', 'desc').limit(120).get();
       const merged = { ...state.days };
       const stale = [];
       snap.docs.forEach(doc => {
-        const v = doc.data(); if (!v || !v.date) return;
+        const v = thaw(doc.data()); if (!v || !v.date) return;
         if (v.demo) { try { db.doc('days/' + v.date).delete().catch(() => {}); } catch (e) {} return; }
         const cloud = { ...emptyDay(v.date), ...v };
         const local = merged[v.date];
@@ -1240,10 +1252,17 @@ async function addWorkout() {
   } else { met = { easy: 4, mod: 6, hard: 8 }[eff]; note = ' Activity not recognised — used a generic MET.'; }
 
   const kcal = Math.max((met - 1) * 3.5 * kg / 200 * min, 0);
-  getDay(viewDate).moves.push({ id: uid(), name, minutes: min, intensity: eff, met: +met.toFixed(1), kcal, src });
+  try {
+    getDay(viewDate).moves.push({ id: uid(), name, minutes: min, intensity: eff, met: +met.toFixed(1), kcal, src });
+    saveLocal();
+  } catch (err) {
+    noteError(err, 'adding a workout');
+    show('Could not add that — ' + errText(err) + '. Details under Setup \u2192 Data.', true);
+    return;
+  }
   persist(viewDate); renderAll();
   $('#woText').value = '';
-  show(`Added ${name} — ${fmt(kcal)} kcal above resting (MET ${met.toFixed(1)}, ${min} min).${note}`);
+  show(`Added ${name} \u2014 ${fmt(kcal)} kcal above resting (MET ${met.toFixed(1)}, ${min} min).${note}`);
 }
 
 /* ---------------------- trends --------------------------------------- */
@@ -1653,15 +1672,21 @@ function wire() {
   $('#woBtn').onclick = addWorkout;
   $('#woText').addEventListener('keydown', e => { if (e.key === 'Enter') addWorkout(); });
   $('#saveDayBits').onclick = () => {
+    const note = $('#woNote');
     const d = getDay(viewDate), p = state.profile;
-    d.steps = clamp(+$('#stepsInput').value || 0, 0, 80000);
+    const steps = clamp(+$('#stepsInput').value || 0, 0, 80000);
     const w = +$('#weightInput').value;
-    if (w > 0) {
-      d.weightKg = p.units === 'imperial' ? w / LB_PER_KG : w;
-      if (viewDate === todayISO()) { p.weightKg = d.weightKg; fillProfileForm(); }
-    } else d.weightKg = null;
+    const kg = w > 0 ? (p.units === 'imperial' ? w / LB_PER_KG : w) : null;
+    d.steps = steps;
+    d.weightKg = kg;
+    if (d.steps !== steps || d.weightKg !== kg) {     // a silent refusal is still a failure
+      noteError(new Error('the day would not accept the change'), 'saving steps and weight');
+      note.textContent = 'Could not save that — reload the page and try again.';
+      return;
+    }
+    if (kg && viewDate === todayISO()) { p.weightKg = kg; fillProfileForm(); }
     persist(viewDate); renderAll();
-    const s = $('#woNote'); s.textContent = 'Saved.'; setTimeout(() => s.textContent = '', 2500);
+    note.textContent = 'Saved.'; setTimeout(() => note.textContent = '', 2500);
   };
 
   ['pUnits', 'pSex', 'pAge', 'pFt', 'pIn', 'pCm', 'pWeight', 'pActivity', 'pPhase', 'pGoalWeight', 'pRate', 'pProtein', 'pFat', 'pEatBack']
