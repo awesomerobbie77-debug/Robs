@@ -71,7 +71,12 @@ button,input,select,textarea{font:inherit; color:inherit}
 .lab{font-family:Archivo; font-weight:700; font-size:10.5px; letter-spacing:.12em; text-transform:uppercase; color:var(--muted)}
 .num{font-family:"IBM Plex Mono",monospace; font-variant-numeric:tabular-nums}
 .grid2{display:grid; grid-template-columns:1fr 1fr; gap:16px}
-@media (max-width:760px){ .grid2{grid-template-columns:1fr} }
+@media (max-width:760px){
+  .grid2{grid-template-columns:1fr}
+  /* iOS zooms the viewport when a focused control is under 16px, which scrolls
+     the buttons out from under your thumb mid-tap. */
+  textarea,input[type="text"],input[type="number"],select{font-size:16px}
+}
 
 /* ---------- summary ---------- */
 .headline{display:flex; align-items:flex-end; gap:14px; flex-wrap:wrap}
@@ -840,12 +845,13 @@ function setDbStatus(t) { $('#dbStatus').textContent = t; }
 
 let saveTimer = null;
 function persist(iso) {
+  if (iso && state.days[iso]) state.days[iso].updatedAt = Date.now();
   saveLocal();
   if (!db) return;
   clearTimeout(saveTimer);
   saveTimer = setTimeout(() => {
     queueWrite('app/profile', { ...state.profile, favs: state.favs, demo: state.demo, updatedAt: Date.now() });
-    if (iso) { const d = getDay(iso); queueWrite('days/' + iso, { ...d, updatedAt: Date.now() }); }
+    if (iso && state.days[iso]) queueWrite('days/' + iso, state.days[iso]);
   }, 500);
 }
 
@@ -861,9 +867,21 @@ async function initCloud() {
       state.favs = Array.isArray(d.favs) ? d.favs : state.favs;
       state.demo = !!d.demo;
       const snap = await db.collection('days').orderBy('date', 'desc').limit(120).get();
-      const days = {};
-      snap.docs.forEach(doc => { const v = doc.data(); if (v && v.date) days[v.date] = { ...emptyDay(v.date), ...v }; });
-      if (Object.keys(days).length) state.days = days;
+      const merged = { ...state.days };
+      const stale = [];
+      snap.docs.forEach(doc => {
+        const v = doc.data(); if (!v || !v.date) return;
+        if (v.demo && !state.demo) return;                  // examples this device already cleared
+        const cloud = { ...emptyDay(v.date), ...v };
+        const local = merged[v.date];
+        if (!local) { merged[v.date] = cloud; return; }
+        if ((cloud.updatedAt || 0) >= (local.updatedAt || 0)) merged[v.date] = cloud;
+        else stale.push(v.date);                            // this device holds the newer copy
+      });
+      state.days = merged;
+      Object.values(state.days).forEach(d => {              // push up anything the cloud is missing
+        if (!snap.docs.some(doc => doc.id === d.date) || stale.includes(d.date)) queueWrite('days/' + d.date, d);
+      });
       saveLocal();
       setDbStatus('synced');
       fillProfileForm(); renderAll();
@@ -1559,7 +1577,18 @@ function renderAll() {
   $('#demoBanner').hidden = !state.demo;
 }
 
+let bootDay = todayISO();
+function rollOverMidnight() {
+  const now = todayISO();
+  if (now === bootDay) return;
+  if (viewDate === bootDay) viewDate = now;   // "today" follows the clock
+  bootDay = now;
+  renderAll();
+}
+
 function wire() {
+  document.addEventListener('visibilitychange', () => { if (!document.hidden) rollOverMidnight(); });
+  window.addEventListener('focus', rollOverMidnight);
   $('#tab-today').onclick = () => setTab('today');
   $('#tab-trends').onclick = () => setTab('trends');
   $('#tab-setup').onclick = () => setTab('setup');
@@ -1598,14 +1627,29 @@ function wire() {
   });
   $('#discardDraft').onclick = () => { draft = null; renderDraft(); $('#mealStatus').hidden = true; };
   $('#addDraft').onclick = () => {
-    if (!draft || !draft.length) return;
-    clearDemoIfNeeded();
-    const meal = $('#mealType').value;
-    const d = getDay(viewDate);
-    draft.forEach(i => d.food.push({ ...i, id: uid(), meal, t: Date.now() }));
-    draft = null; renderDraft();
-    $('#mealText').value = ''; $('#mealStatus').hidden = true;
-    persist(viewDate); renderAll();
+    const status = $('#mealStatus');
+    if (!draft || !draft.length) {
+      status.hidden = false; status.classList.add('bad');
+      status.textContent = 'Nothing to add — run Estimate first.';
+      return;
+    }
+    try {
+      clearDemoIfNeeded();
+      const meal = $('#mealType').value;
+      const d = getDay(viewDate);
+      const kcal = draft.reduce((a, i) => a + i.kcal, 0);
+      const n = draft.length;
+      draft.forEach(i => d.food.push({ ...i, id: uid(), meal, t: Date.now() }));
+      draft = null; renderDraft();
+      $('#mealText').value = '';
+      persist(viewDate); renderAll();
+      status.hidden = false; status.classList.remove('bad');
+      status.textContent = `Added ${n} item${n === 1 ? '' : 's'} to ${meal} on ${prettyDate(viewDate)} — ${fmt(kcal)} kcal.`;
+      setTimeout(() => { if (status.textContent.startsWith('Added ')) status.hidden = true; }, 6000);
+    } catch (err) {
+      status.hidden = false; status.classList.add('bad');
+      status.textContent = 'Could not add that: ' + (err && err.message ? err.message : String(err)) + ' — screenshot this and send it over.';
+    }
   };
 
   $('#logTable').addEventListener('click', e => {
